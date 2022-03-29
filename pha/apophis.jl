@@ -16,7 +16,7 @@ objname = "Apophis"
 maxsteps = 10000
 nyears_bwd = -18.0 # years in backward integration
 nyears_fwd = 9.0 # years in forward integration
-dense = false #true
+dense = Val(false) #Val(true)
 quadmath = false # use quadruple precision
 lyap = false #true # compute Lyapunov exponents
 neosjlpath = pkgdir(NEOs)
@@ -64,10 +64,11 @@ q00 = [-0.18034747703273316, 0.9406910666200128, 0.3457360259054398, -0.01626594
 q0 = vcat(q00, 0.0, 0.0) .+ dq
 
 ####integrator warmup
-propagate(objname, dynamics, 1, jd0, nyears_fwd, ss16asteph_et, output=false, dense=dense, q0=q0, quadmath=quadmath, lyap=lyap, order=order, abstol=abstol)
+
+propagate(objname, dynamics, 1, jd0, nyears_fwd, ss16asteph_et, dense, output=false, q0=q0, quadmath=quadmath, lyap=lyap, order=order, abstol=abstol)
 println("*** Finished warmup")
 
 ######Full jet transport integration
-propagate(objname*"_bwd", dynamics, maxsteps, jd0, nyears_bwd, ss16asteph_et, dense=dense, q0=q0, quadmath=quadmath, lyap=lyap, order=order, abstol=abstol, radarobsfile=radarfile_bwd, opticalobsfile=optfile_bwd, tord=10, niter=5)
-propagate(objname*"_fwd", dynamics, maxsteps, jd0, nyears_fwd, ss16asteph_et, dense=dense, q0=q0, quadmath=quadmath, lyap=lyap, order=order, abstol=abstol, radarobsfile=radarfile_fwd, opticalobsfile=optfile_fwd, tord=10, niter=5)
+propagate(objname*"_bwd", dynamics, maxsteps, jd0, nyears_bwd, ss16asteph_et, dense, q0=q0, quadmath=quadmath, lyap=lyap, order=order, abstol=abstol, radarobsfile=radarfile_bwd, opticalobsfile=optfile_bwd, tord=10, niter=5)
+propagate(objname*"_fwd", dynamics, maxsteps, jd0, nyears_fwd, ss16asteph_et, dense, q0=q0, quadmath=quadmath, lyap=lyap, order=order, abstol=abstol, radarobsfile=radarfile_fwd, opticalobsfile=optfile_fwd, tord=10, niter=5)
 println("*** Finished asteroid ephemeris integration")

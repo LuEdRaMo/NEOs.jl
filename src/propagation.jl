@@ -106,121 +106,136 @@ function propagate(objname::String, dynamics::Function, maxsteps::Int, jd0::T,
     propagate(objname::String, dynamics::Function, maxsteps::Int, jd0::T, tspan::T, ss16asteph_et; kwargs...)
 end
 
-function propagate(objname::String, dynamics::Function, maxsteps::Int, jd0::T,
-        tspan::T, ss16asteph_et::TaylorInterpolant; output::Bool=true, newtoniter::Int=10,
-        dense::Bool=false, q0::Vector=initialcond(), radarobsfile::String="",
-        opticalobsfile::String="", quadmath::Bool=false,
-        debias_table::String="2018", μ_ast::Vector=μ_ast343_DE430[1:end],
-        lyap::Bool=false, order::Int=order, abstol::T=abstol, tord::Int=10,
-        niter::Int=5) where {T<:Real}
-    # get asteroid initial conditions
-    @assert length(q0) == 8
-    @show q0
-    @show jd0, jd0-JD_J2000
-    # Number of bodies
-    Nm1 = (size(ss16asteph_et.x)[2]-13) ÷ 6 # number of massive bodies
-    @show Nm1
-    N = Nm1 + 1 # number of bodies, including NEA
-    # vector of G*m values
-    μ = vcat(μ_DE430[1:11], μ_ast[1:Nm1-11], zero(μ_DE430[1]))
-
-    # check: number of SS bodies (N) in ephemeris must be equal to length of GM vector (μ)
-    @assert N == length(μ) "Total number of bodies in ephemeris must be equal to length of GM vector μ"
-
-    # process ephemeris (switch from km,km/s units to au,au/day)
-    # compute Newtonian accelerations and potentials (used in post-Newtonian accelerations)
-    ss16asteph_auday, acc_eph, newtonianNb_Potential = loadeph(ss16asteph_et, μ)
-
-    # interaction matrix with flattened bodies
-    UJ_interaction = fill(false, N)
-    # UJ_interaction[su] = true
-    UJ_interaction[ea] = true
-    # UJ_interaction[mo] = true
-    params = (ss16asteph_auday, acc_eph, newtonianNb_Potential, jd0, UJ_interaction, N, μ)
-
-    if quadmath
-        _q0 = one(Float128)*q0
-        _t0 = zero(Float128)
-        _abstol = Float128(abstol)
-        _ss16asteph = TaylorInterpolant(Float128(ss16asteph_auday.t0), Float128.(ss16asteph_auday.t), map(x->Taylor1(Float128.(x.coeffs)), ss16asteph_auday.x))
-        _acc_eph = TaylorInterpolant(Float128(acc_eph.t0), Float128.(acc_eph.t), map(x->Taylor1(Float128.(x.coeffs)), acc_eph.x))
-        _newtonianNb_Potential = TaylorInterpolant(Float128(newtonianNb_Potential.t0), Float128.(newtonianNb_Potential.t), map(x->Taylor1(Float128.(x.coeffs)), newtonianNb_Potential.x))
-        _params = (_ss16asteph, _acc_eph, _newtonianNb_Potential, Float128(jd0), UJ_interaction, N, μ)
-    else
-        _q0 = q0
-        _t0 = zero(Float64)
-        _abstol = abstol
-        _params = params
-    end
-
-    @show _tmax = _t0+tspan*yr #final time of integration
-
-    # propagate orbit
-    if dense
-        @time interp = apophisinteg(dynamics, _q0, _t0, _tmax, order, _abstol, _params; maxsteps=maxsteps, dense=dense)
-        if quadmath
-            asteph_t0 = Float64(jd0-JD_J2000) # days since J2000 until initial integration time
-            asteph_t = Float64.(interp.t[:])
-            asteph_x = convert(Array{Taylor1{eltype(q0)}}, interp.x[:,:])
-            asteph = TaylorInterpolant(asteph_t0, asteph_t, asteph_x)
-            sol = (asteph=asteph,
-            )
-        else
-            asteph_t0 = (jd0-JD_J2000) # days since J2000 until initial integration time
-            asteph_t = interp.t[:]
-            asteph_x = interp.x[:,:]
-            asteph = TaylorInterpolant(asteph_t0, asteph_t, asteph_x)
-            sol = (asteph=asteph,
-            )
-        end
-    elseif lyap
-        @time sol_objs = lyap_apophisinteg(dynamics, _q0, _t0, _tmax, order, _abstol, _params; maxsteps=maxsteps)
-        sol = (
-            tv=convert(Array{eltype(q0)}, sol_objs[1][:]),
-            xv=convert(Array{eltype(q0)}, sol_objs[2][:,:]),
-            λv=convert(Array{eltype(q0)}, sol_objs[3][:,:])
-        )
-    else
-        @time sol_objs = apophisinteg(dynamics, rvelea, _q0, _t0, _tmax, order, _abstol, _params; maxsteps=maxsteps, newtoniter=newtoniter, dense=true)
-        asteph_t0 = (_params[4]-JD_J2000) # days since J2000 until initial integration time
-        asteph_t = sol_objs[1].t[:]
-        asteph_x = sol_objs[1].x[:,:]
-        asteph = TaylorInterpolant(asteph_t0, asteph_t, asteph_x)
-        sol = (
-            asteph=asteph,
-            tv = asteph_t0 .+ asteph_t,
-            xv = asteph_x(),
-            tvS1=convert(Array{eltype(q0)}, sol_objs[2][:]),
-            xvS1=convert(Array{eltype(q0)}, sol_objs[3][:,:]),
-            gvS1=convert(Array{eltype(q0)}, sol_objs[4][:])
-        )
-    end
-
-    #write solution and predicted values of observations (if requested) to .jld files
-    if output
-        outfilename = save2jldandcheck(objname, sol)
-        # if requested by user, calculate computed (i.e., predicted) values of observations
-        if !lyap # don't compute observation ephemeris when "in Lyapunov spectra mode"
-            try
-                furnsh(
-                    joinpath(artifact"naif0012", "naif0012.tls"), # load leapseconds kernel
-                    joinpath(artifact"de430", "de430_1850-2150.bsp"), # at least one SPK file must be loaded to read .tls file
-                )
-                if radarobsfile != ""
-                    println("compute_radar_obs")
-                    @time compute_radar_obs("deldop_"*basename(radarobsfile)*".jld", radarobsfile, asteph, ss16asteph_et, tord=tord, niter=niter)
-                end
-                if opticalobsfile != ""
-                    println("compute_optical_obs")
-                    @time compute_optical_obs("radec_"*basename(opticalobsfile)*".jld", opticalobsfile, asteph, ss16asteph_et, debias_table=debias_table, niter=niter)
-                end
-            catch e
-                @error "Unable to compute observation residuals" exception=(e, catch_backtrace())
+for V in (:Val{true}, :Val{false})
+    @eval begin
+        function propagate(objname::String, dynamics::Function, maxsteps::Int, jd0::T,
+            tspan::T, ss16asteph_et::TaylorInterpolant, ::$V; output::Bool=true, newtoniter::Int=10,
+            q0::Vector=initialcond(), radarobsfile::String="",
+            opticalobsfile::String="", quadmath::Bool=false,
+            debias_table::String="2018", μ_ast::Vector=μ_ast343_DE430[1:end],
+            lyap::Bool=false, order::Int=order, abstol::T=abstol, tord::Int=10,
+            niter::Int=5) where {T<:Real}
+            # get asteroid initial conditions
+            @assert length(q0) == 8
+            @show q0
+            @show jd0, jd0-JD_J2000
+            # Number of bodies
+            Nm1 = (size(ss16asteph_et.x)[2]-13) ÷ 6 # number of massive bodies
+            @show Nm1
+            N = Nm1 + 1 # number of bodies, including NEA
+            # vector of G*m values
+            μ = vcat(μ_DE430[1:11], μ_ast[1:Nm1-11], zero(μ_DE430[1]))
+        
+            # check: number of SS bodies (N) in ephemeris must be equal to length of GM vector (μ)
+            @assert N == length(μ) "Total number of bodies in ephemeris must be equal to length of GM vector μ"
+        
+            # process ephemeris (switch from km,km/s units to au,au/day)
+            # compute Newtonian accelerations and potentials (used in post-Newtonian accelerations)
+            ss16asteph_auday, acc_eph, newtonianNb_Potential = loadeph(ss16asteph_et, μ)
+        
+            # interaction matrix with flattened bodies
+            UJ_interaction = fill(false, N)
+            # UJ_interaction[su] = true
+            UJ_interaction[ea] = true
+            # UJ_interaction[mo] = true
+            params = (ss16asteph_auday, acc_eph, newtonianNb_Potential, jd0, UJ_interaction, N, μ)
+        
+            if quadmath
+                _q0 = one(Float128)*q0
+                _t0 = zero(Float128)
+                _abstol = Float128(abstol)
+                _ss16asteph = TaylorInterpolant(Float128(ss16asteph_auday.t0), Float128.(ss16asteph_auday.t), map(x->Taylor1(Float128.(x.coeffs)), ss16asteph_auday.x))
+                _acc_eph = TaylorInterpolant(Float128(acc_eph.t0), Float128.(acc_eph.t), map(x->Taylor1(Float128.(x.coeffs)), acc_eph.x))
+                _newtonianNb_Potential = TaylorInterpolant(Float128(newtonianNb_Potential.t0), Float128.(newtonianNb_Potential.t), map(x->Taylor1(Float128.(x.coeffs)), newtonianNb_Potential.x))
+                _params = (_ss16asteph, _acc_eph, _newtonianNb_Potential, Float128(jd0), UJ_interaction, N, μ)
+            else
+                _q0 = q0
+                _t0 = zero(Float64)
+                _abstol = abstol
+                _params = params
             end
-        end
+        
+            @show _tmax = _t0+tspan*yr #final time of integration
+        
+            # propagate orbit
+            if $V == Val{true}
+                @time interp = apophisinteg(dynamics, _q0, _t0, _tmax, order, _abstol, Val(true), _params; maxsteps=maxsteps)
+                if quadmath
+                    asteph_t0 = Float64(jd0-JD_J2000) # days since J2000 until initial integration time
+                    asteph_t = Float64.(interp.t[:])
+                    asteph_x = convert(Array{Taylor1{eltype(q0)}}, interp.x[:,:])
+                    asteph = TaylorInterpolant(asteph_t0, asteph_t, asteph_x)
+                    sol = (asteph=asteph,
+                    )
+                else
+                    asteph_t0 = (jd0-JD_J2000) # days since J2000 until initial integration time
+                    asteph_t = interp.t[:]
+                    asteph_x = interp.x[:,:]
+                    asteph = TaylorInterpolant(asteph_t0, asteph_t, asteph_x)
+                    sol = (asteph=asteph,
+                    )
+                end
+            elseif lyap
+                @time sol_objs = lyap_apophisinteg(dynamics, _q0, _t0, _tmax, order, _abstol, _params; maxsteps=maxsteps)
+                sol = (
+                    tv=convert(Array{eltype(q0)}, sol_objs[1][:]),
+                    xv=convert(Array{eltype(q0)}, sol_objs[2][:,:]),
+                    λv=convert(Array{eltype(q0)}, sol_objs[3][:,:])
+                )
+            else
+                @time sol_objs = apophisinteg(dynamics, rvelea, _q0, _t0, _tmax, order, _abstol, Val(true), _params; maxsteps=maxsteps, newtoniter=newtoniter)
+                asteph_t0 = (_params[4]-JD_J2000) # days since J2000 until initial integration time
+                asteph_t = sol_objs[1].t[:]
+                asteph_x = sol_objs[1].x[:,:]
+                asteph = TaylorInterpolant(asteph_t0, asteph_t, asteph_x)
+                sol = (
+                    asteph=asteph,
+                    tv = asteph_t0 .+ asteph_t,
+                    xv = asteph_x(),
+                    tvS1=convert(Array{eltype(q0)}, sol_objs[2][:]),
+                    xvS1=convert(Array{eltype(q0)}, sol_objs[3][:,:]),
+                    gvS1=convert(Array{eltype(q0)}, sol_objs[4][:])
+                )
+            end
+        
+            #write solution and predicted values of observations (if requested) to .jld files
+            if output
+                outfilename = save2jldandcheck(objname, sol)
+                # if requested by user, calculate computed (i.e., predicted) values of observations
+                if !lyap # don't compute observation ephemeris when "in Lyapunov spectra mode"
+                    try
+                        furnsh(
+                            joinpath(artifact"naif0012", "naif0012.tls"), # load leapseconds kernel
+                            joinpath(artifact"de430", "de430_1850-2150.bsp"), # at least one SPK file must be loaded to read .tls file
+                        )
+                        if radarobsfile != ""
+                            println("compute_radar_obs")
+                            @time compute_radar_obs("deldop_"*basename(radarobsfile)*".jld", radarobsfile, asteph, ss16asteph_et, tord=tord, niter=niter)
+                        end
+                        if opticalobsfile != ""
+                            println("compute_optical_obs")
+                            @time compute_optical_obs("radec_"*basename(opticalobsfile)*".jld", opticalobsfile, asteph, ss16asteph_et, debias_table=debias_table, niter=niter)
+                        end
+                    catch e
+                        @error "Unable to compute observation residuals" exception=(e, catch_backtrace())
+                    end
+                end
+            end
+        
+            return sol
+        end    
     end
-
-    return sol
+end
+function propagate(objname::String, dynamics::Function, maxsteps::Int, jd0::T,
+    tspan::T, ss16asteph_et::TaylorInterpolant; output::Bool=true, newtoniter::Int=10,
+    q0::Vector=initialcond(), radarobsfile::String="",
+    opticalobsfile::String="", quadmath::Bool=false,
+    debias_table::String="2018", μ_ast::Vector=μ_ast343_DE430[1:end],
+    lyap::Bool=false, order::Int=order, abstol::T=abstol, tord::Int=10,
+    niter::Int=5) where {T<:Real}
+    return propagate(objname, dynamics, maxsteps, jd0, tspan, ss16asteph_et, Val(false);
+    output, newtoniter, q0, radarobsfile, opticalobsfile, quadmath, debias_table, μ_ast,
+    lyap, order, abstol, tord, niter)
 end
 
 function compute_radar_obs(outfilename::String, radarobsfile::String,
