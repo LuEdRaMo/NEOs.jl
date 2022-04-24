@@ -631,9 +631,9 @@ uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
 [[PlanetaryEphemeris]]
 deps = ["AutoHashEquals", "Dates", "DelimitedFiles", "JLD", "LinearAlgebra", "Printf", "Quadmath", "TaylorIntegration", "TaylorSeries"]
-git-tree-sha1 = "3561b34fff1731dbae51cd2cab05cca807149d3a"
+git-tree-sha1 = "a6f2ee79376bb0f7ece753cb65266aad1e8285bb"
 repo-rev = "main"
-repo-url = "git@github.com:PerezHz/PlanetaryEphemeris.jl.git"
+repo-url = "https://github.com/PerezHz/PlanetaryEphemeris.jl.git"
 uuid = "d83715d0-7e5f-11e9-1a59-4137b20d8363"
 version = "0.1.0"
 
@@ -1015,9 +1015,9 @@ version = "0.2.1"
 
 [[libsharp2_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "f4cae22b4df5c0e52e62d53a3cbf20fdc9607b6d"
+git-tree-sha1 = "9a7b8663b021ba776c89d9de7cdb2069cc27c00a"
 uuid = "180207a7-b08e-5162-af94-7d62a04fe081"
-version = "1.0.2+0"
+version = "1.0.2+1"
 
 [[nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
